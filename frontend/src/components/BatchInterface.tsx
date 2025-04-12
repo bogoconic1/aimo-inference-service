@@ -30,6 +30,11 @@ const BatchInterface: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [maxNumSeqs, setMaxNumSeqs] = useState(8);
   const [maxLength, setMaxLength] = useState(14000);
+  const [modelName, setModelName] = useState("casperhansen/deepseek-r1-distill-qwen-1.5b-awq");
+  const [systemPrompt, setSystemPrompt] = useState(
+    "Please reason step by step, and put your final answer within \\boxed{}." +
+    "The final answer must be an integer between 0 and 999, inclusive. You should arrive at this number by taking the problem solution modulo 1000."
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<Result[]>([]);
   const [currentProgress, setCurrentProgress] = useState('');
@@ -122,6 +127,8 @@ const BatchInterface: React.FC = () => {
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('model_name', modelName);
+    formData.append('system_prompt', systemPrompt);
     
     // Use query parameters instead of form data for these values
     const url = `http://localhost:8000/batch?max_num_seqs=${maxNumSeqs}&max_length=${maxLength}`;
@@ -216,6 +223,26 @@ const BatchInterface: React.FC = () => {
                 Selected file: {file.name}
               </Typography>
             )}
+
+            <TextField
+              label="Model Name"
+              value={modelName}
+              onChange={(e) => setModelName(e.target.value)}
+              disabled={isLoading}
+              helperText="Enter a valid Hugging Face model name"
+              fullWidth
+            />
+
+            <TextField
+              label="System Prompt"
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              disabled={isLoading}
+              multiline
+              rows={4}
+              helperText="Enter the system prompt for the model"
+              fullWidth
+            />
 
             <TextField
               label="Max Number of Sequences"

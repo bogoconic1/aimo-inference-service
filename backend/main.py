@@ -2,7 +2,7 @@ import os
 import json
 import time
 from typing import List, Optional, Any, Dict, Union
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
@@ -22,10 +22,9 @@ app.add_middleware(
 )
 
 # Model configuration
-MODEL_PATH = "casperhansen/deepseek-r1-distill-qwen-1.5b-awq"
 
 # Initialize SGLang server
-def init_sglang_server():
+def init_sglang_server(MODEL_PATH):
     server_process = execute_shell_command(
         f"""python -m sglang.launch_server 
         --model-path {MODEL_PATH} 
@@ -54,6 +53,8 @@ current_batch_correct = 0
 current_batch_df = None
 current_batch_max_num_seqs = 3
 current_batch_max_length = 1000
+current_model_name = "casperhansen/deepseek-r1-distill-qwen-1.5b-awq"
+current_system_prompt = None
 
 class BatchRequest(BaseModel):
     max_num_seqs: int = 8
@@ -122,7 +123,7 @@ def batch_message_generate(list_of_messages: list[str], max_tokens: int):
                     "method": "POST",
                     "url": "/chat/completions",
                     "body": {
-                        "model": MODEL_PATH,
+                        "model": current_model_name,
                         "messages": msg,
                         "max_tokens": max_tokens,
                         "temperature": 0.6,
@@ -206,14 +207,14 @@ def extract_answer(list_of_messages: list[str], generation_lengths: list[int], m
             extracted_answers.append((answer, num_tokens, 2))
     return extracted_answers
 
-def create_starter_messages(question: str, index: int) -> str:
+def create_starter_messages(question: str, index: int, system_prompt: str) -> str:
     options = []
     for _ in range(8):
-        options.append(
-            [
-                {'role': 'user', 'content': question + " The final answer should be a non-negative integer after taking modulo 1000."}
-            ]
-        )
+        messages = [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': question}
+        ]
+        options.append(messages)
     
     return options[index % len(options)]
 
@@ -238,14 +239,14 @@ def process_single_question(row, max_num_seqs, max_length):
     """
     Process a single question and return the result.
     """
-    global current_batch_index, current_batch_correct
+    global current_batch_index, current_batch_correct, current_system_prompt
     
     id = row['id']
     problem = row['problem']
     answer = row['answer']
     
     # Create messages for batch inference
-    messages = [create_starter_messages(problem, i) for i in range(max_num_seqs)]
+    messages = [create_starter_messages(problem, i, current_system_prompt) for i in range(max_num_seqs)]
     
     # Perform batch inference using the batch API
     batch_results, token_lengths = batch_message_generate(messages, max_length)
@@ -356,11 +357,20 @@ async def batch_inference(
     file: UploadFile = File(...),
     max_num_seqs: int = 3,
     max_length: int = 1000,
+    model_name: str = Form("casperhansen/deepseek-r1-distill-qwen-1.5b-awq"),
+    system_prompt: str = Form(
+        "You are a helpful math assistant. Your task is to solve the given math problem. " +
+        "Think step by step and provide your final answer in a \\boxed{} command. " +
+        "The final answer should be a non-negative integer after taking modulo 1000."
+    ),
 ):
     try:
         # Read and validate CSV file
         df = pd.read_csv(file.file)
         print(f"Processing batch with max_num_seqs={max_num_seqs}, max_length={max_length}")
+        print(f"Using model: {model_name}")
+        print(f"System prompt: {system_prompt}")
+        
         df = df[df.problem == df.problem].reset_index(drop=True)
         if not all(col in df.columns for col in ['problem', 'answer']):
             raise HTTPException(status_code=400, detail="CSV must contain 'problem' and 'answer' columns")
@@ -368,6 +378,13 @@ async def batch_inference(
         # Reset global tracking variables
         global current_batch_results, current_batch_total, current_batch_index, current_batch_correct
         global current_batch_df, current_batch_max_num_seqs, current_batch_max_length
+        global current_model_name, current_system_prompt
+        
+        # Check if we need to reinitialize the model
+        if current_model_name != model_name:
+            current_model_name = model_name
+
+        init_sglang_server(current_model_name)
         
         current_batch_results = []
         current_batch_total = len(df)
@@ -376,22 +393,12 @@ async def batch_inference(
         current_batch_df = df
         current_batch_max_num_seqs = max_num_seqs
         current_batch_max_length = max_length
-        
-        # Process the first question immediately
-        # if len(df) > 0:
-        #     first_row = df.iloc[0]
-        #     result = process_single_question(first_row, max_num_seqs, max_length)
-        #     return {
-        #         "status": "started",
-        #         "message": f"Batch processing started for {current_batch_total} questions",
-        #         "total": current_batch_total,
-        #         "first_result": result
-        #     }
+        current_system_prompt = system_prompt
         
         return {
             "status": "started",
-            "message": "Batch processing started with empty file",
-            "total": 0
+            "message": f"Batch processing started for {current_batch_total} questions",
+            "total": current_batch_total
         }
     
     except Exception as e:
@@ -400,6 +407,5 @@ async def batch_inference(
 
 if __name__ == "__main__":
     import uvicorn
-    server_process = init_sglang_server()
     uvicorn.run(app, host="0.0.0.0", port=8000) 
 
