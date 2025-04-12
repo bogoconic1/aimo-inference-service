@@ -1,19 +1,14 @@
-# Math QA Assistant
+# Math QA Batch Evaluation
 
-A full-stack application that provides a chatbot interface and batch inference capabilities for math problem solving using the deepseek-r1-distill-qwen-14b-awq model.
+A full-stack application that provides batch inference capabilities for math problem solving using the deepseek-r1-distill-qwen-1.5b-awq model.
 
 ## Features
 
-1. Chat Interface
-   - Real-time streaming responses
-   - Math problem solving with step-by-step explanations
-   - Modern, responsive UI
-
-2. Batch Inference
-   - Upload CSV files with math problems
-   - Configurable parameters (max sequences, max length)
-   - Progress tracking and results visualization
-   - Export results to CSV
+- Batch Inference
+  - Upload CSV files with math problems
+  - Configurable parameters (max sequences, max length)
+  - Progress tracking and results visualization
+  - Export results to CSV
 
 ## Prerequisites
 
@@ -21,7 +16,7 @@ A full-stack application that provides a chatbot interface and batch inference c
 - Node.js 14+
 - CUDA-capable GPU
 - SGLang library
-- The deepseek-r1-distill-qwen-14b-awq model
+- Your model
 
 ## Setup
 
@@ -64,33 +59,27 @@ The application will be available at:
 
 ## Usage
 
-### Chat Interface
-1. Navigate to the Chat tab
-2. Enter your math question in the text field
-3. Click Send or press Enter
-4. View the streaming response with step-by-step solution
-
 ### Batch Inference
-1. Navigate to the Batch Inference tab
-2. Upload a CSV file with 'problem' and 'answer' columns
-3. Configure max_num_seqs and max_length parameters
-4. Click Process Batch
-5. View results in the table
-6. Download results as CSV
+1. Upload a CSV file with 'id', 'problem', and 'answer' columns
+2. Configure max_num_seqs (default: 3) and max_length (default: 1000) parameters
+3. Click Process Batch
+4. View results in the table
+5. Download results as CSV
 
 ## CSV Format for Batch Inference
 
 The input CSV file should have the following columns:
+- id: A unique identifier for each problem
 - problem: The math problem text
 - answer: The correct answer
 
 Example:
 ```csv
-problem,answer
-"What is 2 + 2?",4
-"Solve for x: 3x + 5 = 20",5
+id,problem,answer
+1,"What is 2 + 2?",4
+2,"Solve for x: 3x + 5 = 20",5
 ```
 
 ## License
 
-MIT License 
+Apache 2.0

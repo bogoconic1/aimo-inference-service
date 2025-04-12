@@ -45,6 +45,12 @@ client = openai.Client(base_url="http://127.0.0.1:30020/v1", api_key="None")
 # Global counter for batch requests
 num_requests_so_far = 0
 
+# Global variables to track batch progress
+current_batch_results = []
+current_batch_total = 0
+current_batch_index = 0
+current_batch_correct = 0
+
 class BatchRequest(BaseModel):
     max_num_seqs: int = 8
     max_length: int = 14000
@@ -207,6 +213,33 @@ def create_starter_messages(question: str, index: int) -> str:
     
     return options[index % len(options)]
 
+@app.get("/batch")
+async def get_batch_progress():
+    """
+    Get the current progress of the batch processing.
+    Returns the current result and progress information.
+    """
+    if current_batch_index >= current_batch_total:
+        return {
+            "status": "completed",
+            "message": f"All {current_batch_total} questions completed. Correct: {current_batch_correct}/{current_batch_total}"
+        }
+    
+    if current_batch_index < len(current_batch_results):
+        current_result = current_batch_results[current_batch_index]
+        return {
+            "status": "in_progress",
+            "current": current_batch_index + 1,
+            "total": current_batch_total,
+            "correct_so_far": current_batch_correct,
+            "current_result": current_result
+        }
+    
+    return {
+        "status": "waiting",
+        "message": "No batch processing in progress"
+    }
+
 @app.post("/batch")
 async def batch_inference(
     file: UploadFile = File(...),
@@ -220,6 +253,13 @@ async def batch_inference(
         df = df[df.problem == df.problem].reset_index(drop=True)
         if not all(col in df.columns for col in ['problem', 'answer']):
             raise HTTPException(status_code=400, detail="CSV must contain 'problem' and 'answer' columns")
+        
+        # Reset global tracking variables
+        global current_batch_results, current_batch_total, current_batch_index, current_batch_correct
+        current_batch_results = []
+        current_batch_total = len(df)
+        current_batch_index = 0
+        current_batch_correct = 0
         
         results = []
         total = len(df)
@@ -267,14 +307,27 @@ async def batch_inference(
                 print(f"Estimation failed: {e}")
                 all_extracted_answers = extracted_answers
             
-            results.append({
+            result = {
                 "id": id,
                 "problem": problem,
                 "true_answer": answer,
                 "predicted_answer": predicted_answer,
                 "extracted_answers": extracted_answers,
                 "progress": f"{idx + 1}/{total}"
-            })
+            }
+            
+            results.append(result)
+            
+            # Update global tracking variables
+            current_batch_results.append(result)
+            current_batch_index = idx + 1
+            
+            # Check if the answer is correct
+            try:
+                if int(answer) == int(predicted_answer):
+                    current_batch_correct += 1
+            except:
+                pass
         
         return {"results": results}
     

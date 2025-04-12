@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Button,
@@ -33,6 +33,59 @@ const BatchInterface: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<Result[]>([]);
   const [currentProgress, setCurrentProgress] = useState('');
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
+  const [batchStatus, setBatchStatus] = useState<{
+    status: 'waiting' | 'in_progress' | 'completed';
+    current?: number;
+    total?: number;
+    correct_so_far?: number;
+    current_result?: Result;
+    message?: string;
+  }>({ status: 'waiting' });
+
+  // Function to poll the batch progress
+  const pollBatchProgress = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/batch');
+      if (!response.ok) {
+        throw new Error('Failed to fetch batch progress');
+      }
+      
+      const data = await response.json();
+      setBatchStatus(data);
+      
+      if (data.status === 'in_progress' && data.current_result) {
+        setCurrentProgress(
+          `Question ${data.current} complete, Answer: ${data.current_result.true_answer}, Predicted Answer: ${data.current_result.predicted_answer}, Correct so far: ${data.correct_so_far}/${data.current}`
+        );
+      } else if (data.status === 'completed') {
+        setCurrentProgress(data.message || 'Batch processing completed');
+        // Stop polling when completed
+        if (pollingInterval) {
+          clearInterval(pollingInterval);
+          setPollingInterval(null);
+        }
+      }
+    } catch (error) {
+      console.error('Error polling batch progress:', error);
+    }
+  };
+
+  // Start polling when batch processing starts
+  useEffect(() => {
+    if (isLoading && !pollingInterval) {
+      const interval = setInterval(pollBatchProgress, 1000); // Poll every second
+      setPollingInterval(interval);
+    }
+    
+    // Cleanup function to clear interval when component unmounts or isLoading changes
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+        setPollingInterval(null);
+      }
+    };
+  }, [isLoading]);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
@@ -47,6 +100,7 @@ const BatchInterface: React.FC = () => {
     setIsLoading(true);
     setResults([]);
     setCurrentProgress('');
+    setBatchStatus({ status: 'waiting' });
 
     const formData = new FormData();
     formData.append('file', file);
@@ -162,6 +216,14 @@ const BatchInterface: React.FC = () => {
             {currentProgress}
           </Typography>
         </Box>
+      )}
+
+      {batchStatus.status === 'completed' && (
+        <Paper elevation={3} sx={{ p: 3, mb: 3, bgcolor: 'success.light' }}>
+          <Typography variant="h6" color="success.dark">
+            {batchStatus.message}
+          </Typography>
+        </Paper>
       )}
 
       {results.length > 0 && (
