@@ -1,10 +1,11 @@
 import os
 import json
 import time
-from typing import List, Optional
+from typing import List, Optional, Any, Dict, Union
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
+import numpy as np
 from pydantic import BaseModel
 import openai
 from sglang.utils import execute_shell_command, wait_for_server
@@ -50,6 +51,9 @@ current_batch_results = []
 current_batch_total = 0
 current_batch_index = 0
 current_batch_correct = 0
+current_batch_df = None
+current_batch_max_num_seqs = 3
+current_batch_max_length = 1000
 
 class BatchRequest(BaseModel):
     max_num_seqs: int = 8
@@ -213,32 +217,139 @@ def create_starter_messages(question: str, index: int) -> str:
     
     return options[index % len(options)]
 
+def convert_numpy_types(obj: Any) -> Any:
+    """
+    Convert NumPy types to Python native types for JSON serialization.
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
+
+def process_single_question(row, max_num_seqs, max_length):
+    """
+    Process a single question and return the result.
+    """
+    global current_batch_index, current_batch_correct
+    
+    id = row['id']
+    problem = row['problem']
+    answer = row['answer']
+    
+    # Create messages for batch inference
+    messages = [create_starter_messages(problem, i) for i in range(max_num_seqs)]
+    
+    # Perform batch inference using the batch API
+    batch_results, token_lengths = batch_message_generate(messages, max_length)
+    
+    # Extract answers from responses
+    extracted_answers = extract_answer(batch_results, token_lengths, max_length)
+    
+    # Add method to each answer
+    extracted_answers = [(x[0], x[1], x[2], "C") for x in extracted_answers]
+    
+    # Select the final answer
+    predicted_answer = select_answer(extracted_answers)
+    
+    # Try to get estimation answers if time permits
+    try:
+        # Add the completion to the messages
+        for i in range(len(messages)):
+            messages[i].append({"role": "assistant", 'content': batch_results[i] + "\n\nOh, I suddenly got the answer to the whole problem, Final Answer: \\boxed{"})
+        
+        # Generate estimation answers
+        estimation_texts, estimation_lengths = batch_message_generate(messages, max_tokens=8)
+        estimation_texts = [msg[-1]['content'] + text for msg, text in zip(messages, estimation_texts)]
+        estimated_answers = extract_answer(estimation_texts, estimation_lengths, max_tokens=8)
+        
+        # Add method to each estimated answer
+        estimated_answers = [(x[0], x[1], x[2], "E") for x in estimated_answers]
+        
+        # Combine all answers
+        all_extracted_answers = extracted_answers + estimated_answers
+        
+        # Select the final answer from all answers
+        predicted_answer = select_answer(all_extracted_answers)
+    except Exception as e:
+        print(f"Estimation failed: {e}")
+        all_extracted_answers = extracted_answers
+    
+    result = {
+        "id": convert_numpy_types(id),
+        "problem": problem,
+        "true_answer": convert_numpy_types(answer),
+        "predicted_answer": convert_numpy_types(predicted_answer),
+        "extracted_answers": [(a, convert_numpy_types(t), convert_numpy_types(w), m) for a, t, w, m in extracted_answers],
+        "progress": f"{current_batch_index + 1}/{current_batch_total}"
+    }
+    
+    # Check if the answer is correct
+    try:
+        if int(answer) == int(predicted_answer):
+            current_batch_correct += 1
+    except:
+        pass
+    
+    # Update global tracking variables
+    current_batch_results.append(result)
+    current_batch_index += 1
+    
+    return result
+
 @app.get("/batch")
 async def get_batch_progress():
     """
     Get the current progress of the batch processing.
     Returns the current result and progress information.
     """
-    if current_batch_index >= current_batch_total:
-        return {
-            "status": "completed",
-            "message": f"All {current_batch_total} questions completed. Correct: {current_batch_correct}/{current_batch_total}"
+    current_status = None
+    if current_batch_df is None:
+        current_status = {
+            "status": "waiting",
+            "message": "No batch processing in progress"
         }
     
-    if current_batch_index < len(current_batch_results):
-        current_result = current_batch_results[current_batch_index]
-        return {
+    elif current_batch_index >= current_batch_total:
+        current_status = {
+            "status": "completed",
+            "message": f"All {current_batch_total} questions completed. Correct: {current_batch_correct}/{current_batch_total}",
+            "results": current_batch_results
+        }
+    
+    # Process the next question if available
+    elif current_batch_index < len(current_batch_df):
+        next_row = current_batch_df.iloc[current_batch_index]
+        result = process_single_question(
+            next_row, 
+            current_batch_max_num_seqs, 
+            current_batch_max_length
+        )
+        
+        current_status = {
             "status": "in_progress",
-            "current": current_batch_index + 1,
+            "current": current_batch_index,
             "total": current_batch_total,
             "correct_so_far": current_batch_correct,
-            "current_result": current_result
+            "current_result": result,
+            "results": current_batch_results
         }
-    
-    return {
-        "status": "waiting",
-        "message": "No batch processing in progress"
-    }
+
+    else:
+        current_status = {
+            "status": "waiting",
+            "message": "No batch processing in progress"
+        }
+
+    print(current_status)
+    return current_status
 
 @app.post("/batch")
 async def batch_inference(
@@ -256,80 +367,32 @@ async def batch_inference(
         
         # Reset global tracking variables
         global current_batch_results, current_batch_total, current_batch_index, current_batch_correct
+        global current_batch_df, current_batch_max_num_seqs, current_batch_max_length
+        
         current_batch_results = []
         current_batch_total = len(df)
         current_batch_index = 0
         current_batch_correct = 0
+        current_batch_df = df
+        current_batch_max_num_seqs = max_num_seqs
+        current_batch_max_length = max_length
         
-        results = []
-        total = len(df)
+        # Process the first question immediately
+        # if len(df) > 0:
+        #     first_row = df.iloc[0]
+        #     result = process_single_question(first_row, max_num_seqs, max_length)
+        #     return {
+        #         "status": "started",
+        #         "message": f"Batch processing started for {current_batch_total} questions",
+        #         "total": current_batch_total,
+        #         "first_result": result
+        #     }
         
-        for idx, row in df.iterrows():
-            id = row['id']
-            problem = row['problem']
-            answer = row['answer']
-            
-            # Create messages for batch inference
-            messages = [create_starter_messages(problem, i) for i in range(max_num_seqs)]
-            
-            # Perform batch inference using the batch API
-            batch_results, token_lengths = batch_message_generate(messages, max_length)
-            
-            # Extract answers from responses
-            extracted_answers = extract_answer(batch_results, token_lengths, max_length)
-            
-            # Add method to each answer
-            extracted_answers = [(x[0], x[1], x[2], "C") for x in extracted_answers]
-            
-            # Select the final answer
-            predicted_answer = select_answer(extracted_answers)
-            
-            # Try to get estimation answers if time permits
-            try:
-                # Add the completion to the messages
-                for i in range(len(messages)):
-                    messages[i].append({"role": "assistant", 'content': batch_results[i] + "\n\nOh, I suddenly got the answer to the whole problem, Final Answer: \\boxed{"})
-                
-                # Generate estimation answers
-                estimation_texts, estimation_lengths = batch_message_generate(messages, max_tokens=8)
-                estimation_texts = [msg[-1]['content'] + text for msg, text in zip(messages, estimation_texts)]
-                estimated_answers = extract_answer(estimation_texts, estimation_lengths, max_tokens=8)
-                
-                # Add method to each estimated answer
-                estimated_answers = [(x[0], x[1], x[2], "E") for x in estimated_answers]
-                
-                # Combine all answers
-                all_extracted_answers = extracted_answers + estimated_answers
-                
-                # Select the final answer from all answers
-                predicted_answer = select_answer(all_extracted_answers)
-            except Exception as e:
-                print(f"Estimation failed: {e}")
-                all_extracted_answers = extracted_answers
-            
-            result = {
-                "id": id,
-                "problem": problem,
-                "true_answer": answer,
-                "predicted_answer": predicted_answer,
-                "extracted_answers": extracted_answers,
-                "progress": f"{idx + 1}/{total}"
-            }
-            
-            results.append(result)
-            
-            # Update global tracking variables
-            current_batch_results.append(result)
-            current_batch_index = idx + 1
-            
-            # Check if the answer is correct
-            try:
-                if int(answer) == int(predicted_answer):
-                    current_batch_correct += 1
-            except:
-                pass
-        
-        return {"results": results}
+        return {
+            "status": "started",
+            "message": "Batch processing started with empty file",
+            "total": 0
+        }
     
     except Exception as e:
         print(e)

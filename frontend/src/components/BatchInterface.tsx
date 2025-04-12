@@ -35,7 +35,7 @@ const BatchInterface: React.FC = () => {
   const [currentProgress, setCurrentProgress] = useState('');
   const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
   const [batchStatus, setBatchStatus] = useState<{
-    status: 'waiting' | 'in_progress' | 'completed';
+    status: 'waiting' | 'in_progress' | 'completed' | 'error';
     current?: number;
     total?: number;
     correct_so_far?: number;
@@ -55,19 +55,37 @@ const BatchInterface: React.FC = () => {
       setBatchStatus(data);
       
       if (data.status === 'in_progress' && data.current_result) {
+        // Adjust the current number to be 0-based for display
+        const questionNumber = data.current;
         setCurrentProgress(
-          `Question ${data.current} complete, Answer: ${data.current_result.true_answer}, Predicted Answer: ${data.current_result.predicted_answer}, Correct so far: ${data.correct_so_far}/${data.current}`
+          `Question ${questionNumber} complete, Answer: ${data.current_result.true_answer}, Predicted Answer: ${data.current_result.predicted_answer}, Correct so far: ${data.correct_so_far}/${questionNumber}`
         );
+        
+        // Update results with the latest batch results
+        if (data.results && data.results.length > 0) {
+          setResults(data.results);
+        }
       } else if (data.status === 'completed') {
         setCurrentProgress(data.message || 'Batch processing completed');
+        // Update final results
+        if (data.results && data.results.length > 0) {
+          setResults(data.results);
+        }
         // Stop polling when completed
         if (pollingInterval) {
           clearInterval(pollingInterval);
           setPollingInterval(null);
         }
+        setIsLoading(false);
       }
     } catch (error) {
       console.error('Error polling batch progress:', error);
+      // Stop polling on error
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+        setPollingInterval(null);
+      }
+      setIsLoading(false);
     }
   };
 
@@ -119,7 +137,28 @@ const BatchInterface: React.FC = () => {
       }
 
       const data = await response.json();
-      setResults(data.results);
+      
+      if (data.status === 'started') {
+        // Show initial progress message
+        // setCurrentProgress(`Starting batch processing for ${data.total} questions...`);
+        
+        // Add the first result if available
+        /* if (data.first_result) {
+          setResults([data.first_result]);
+          // Update progress message for first result
+          setCurrentProgress(
+            `Question 1 complete, Answer: ${data.first_result.true_answer}, Predicted Answer: ${data.first_result.predicted_answer}, Correct so far: ${data.correct_so_far || 0}/1`
+          );
+        } */
+        
+        // Start polling immediately
+        if (!pollingInterval) {
+          const interval = setInterval(pollBatchProgress, 1000);
+          setPollingInterval(interval);
+        }
+      } else {
+        throw new Error('Unexpected response from server');
+      }
     } catch (error) {
       console.error('Error:', error);
       setResults([{
@@ -130,7 +169,6 @@ const BatchInterface: React.FC = () => {
         progress: '0/0',
         extracted_answers: []
       }]);
-    } finally {
       setIsLoading(false);
     }
   };
@@ -260,7 +298,7 @@ const BatchInterface: React.FC = () => {
                     <TableCell>
                       {result.extracted_answers?.map(([answer, tokens, weight, method], i) => (
                         <div key={i}>
-                          {answer}
+                          [{answer}, {tokens}, {weight}]
                         </div>
                       ))}
                     </TableCell>
