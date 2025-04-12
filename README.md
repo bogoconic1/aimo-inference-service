@@ -1,12 +1,16 @@
 # Math QA Batch Evaluation
 
-A full-stack application that provides batch inference capabilities for math problem solving using the deepseek-r1-distill-qwen-1.5b-awq model.
+A full-stack application that provides batch inference capabilities for math problem solving.
+
+![demo3](./assets/demo3.png)
+
+Most of the frontend is developed using [Cursor](https://www.cursor.com/)
 
 ## Features
 
 - Batch Inference
   - Upload CSV files with math problems
-  - Configurable parameters (max sequences, max length)
+  - Configurable parameters (model name, system prompt, max sequences, max length)
   - Progress tracking and results visualization
   - Export results to CSV
 
@@ -23,6 +27,7 @@ A full-stack application that provides batch inference capabilities for math pro
 1. Clone the repository:
 ```bash
 git clone https://github.com/bogoconic1/aimo-inference-service.git
+cd aimo-inference-service
 ```
 
 2. Set up the backend:
@@ -70,6 +75,13 @@ id,problem,answer
 1,"What is 2 + 2?",4
 2,"Solve for x: 3x + 5 = 20",5
 ```
+
+Click "Submit" and leave it all to the server after that! Intermediate progress will be shown as the evaluation goes!
+
+![demo1](./assets/demo1.png)
+
+Intermediate Progress
+![demo2](./assets/demo2.png)
 
 ## License
 

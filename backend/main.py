@@ -245,40 +245,24 @@ def process_single_question(row, max_num_seqs, max_length):
     problem = row['problem']
     answer = row['answer']
     
-    # Create messages for batch inference
     messages = [create_starter_messages(problem, i, current_system_prompt) for i in range(max_num_seqs)]
-    
-    # Perform batch inference using the batch API
     batch_results, token_lengths = batch_message_generate(messages, max_length)
-    
-    # Extract answers from responses
     extracted_answers = extract_answer(batch_results, token_lengths, max_length)
-    
-    # Add method to each answer
     extracted_answers = [(x[0], x[1], x[2], "C") for x in extracted_answers]
-    
-    # Select the final answer
     predicted_answer = select_answer(extracted_answers)
     
-    # Try to get estimation answers if time permits
     try:
-        # Add the completion to the messages
         for i in range(len(messages)):
             messages[i].append({"role": "assistant", 'content': batch_results[i] + "\n\nOh, I suddenly got the answer to the whole problem, Final Answer: \\boxed{"})
         
-        # Generate estimation answers
         estimation_texts, estimation_lengths = batch_message_generate(messages, max_tokens=8)
         estimation_texts = [msg[-1]['content'] + text for msg, text in zip(messages, estimation_texts)]
         estimated_answers = extract_answer(estimation_texts, estimation_lengths, max_tokens=8)
         
-        # Add method to each estimated answer
         estimated_answers = [(x[0], x[1], x[2], "E") for x in estimated_answers]
-        
-        # Combine all answers
         all_extracted_answers = extracted_answers + estimated_answers
-        
-        # Select the final answer from all answers
         predicted_answer = select_answer(all_extracted_answers)
+
     except Exception as e:
         print(f"Estimation failed: {e}")
         all_extracted_answers = extracted_answers
@@ -292,14 +276,12 @@ def process_single_question(row, max_num_seqs, max_length):
         "progress": f"{current_batch_index + 1}/{current_batch_total}"
     }
     
-    # Check if the answer is correct
     try:
         if int(answer) == int(predicted_answer):
             current_batch_correct += 1
     except:
         pass
-    
-    # Update global tracking variables
+
     current_batch_results.append(result)
     current_batch_index += 1
     
@@ -359,9 +341,8 @@ async def batch_inference(
     max_length: int = 1000,
     model_name: str = Form("casperhansen/deepseek-r1-distill-qwen-1.5b-awq"),
     system_prompt: str = Form(
-        "You are a helpful math assistant. Your task is to solve the given math problem. " +
-        "Think step by step and provide your final answer in a \\boxed{} command. " +
-        "The final answer should be a non-negative integer after taking modulo 1000."
+        "Please reason step by step, and put your final answer within \\boxed{}." +
+        "The final answer must be an integer between 0 and 999, inclusive. You should arrive at this number by taking the problem solution modulo 1000."
     ),
 ):
     try:
