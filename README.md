@@ -22,21 +22,12 @@ A full-stack application that provides batch inference capabilities for math pro
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/bogoconic1/aimo-inference-service.git
 ```
 
 2. Set up the backend:
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-3. Set up the frontend:
-```bash
-cd frontend
-npm install
+bash setup.sh
 ```
 
 ## Running the Application
