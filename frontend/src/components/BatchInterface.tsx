@@ -6,16 +6,14 @@ import {
   Paper,
   Typography,
   CircularProgress,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   LinearProgress,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DownloadIcon from '@mui/icons-material/Download';
+import { AgGridReact } from 'ag-grid-react';
+import { ColDef, ICellRendererParams } from 'ag-grid-community';
+import 'ag-grid-community/styles/ag-grid.css';
+import 'ag-grid-community/styles/ag-theme-alpine.css';
 
 interface Result {
   id: string,
@@ -23,7 +21,7 @@ interface Result {
   true_answer: string;
   predicted_answer: string;
   progress: string;
-  extracted_answers: [string, number, number, string][];  // [answer, num_tokens, weight, method]
+  extracted_answers: string[];  // [answer, num_tokens, weight, method]
 }
 
 const BatchInterface: React.FC = () => {
@@ -146,17 +144,6 @@ const BatchInterface: React.FC = () => {
       const data = await response.json();
       
       if (data.status === 'started') {
-        // Show initial progress message
-        // setCurrentProgress(`Starting batch processing for ${data.total} questions...`);
-        
-        // Add the first result if available
-        /* if (data.first_result) {
-          setResults([data.first_result]);
-          // Update progress message for first result
-          setCurrentProgress(
-            `Question 1 complete, Answer: ${data.first_result.true_answer}, Predicted Answer: ${data.first_result.predicted_answer}, Correct so far: ${data.correct_so_far || 0}/1`
-          );
-        } */
         
         // Start polling immediately
         if (!pollingInterval) {
@@ -184,8 +171,8 @@ const BatchInterface: React.FC = () => {
     if (results.length === 0) return;
 
     const csvContent = [
-      ['ID', 'Problem', 'True Answer', 'Predicted Answer'],
-      ...results.map(r => [r.id, r.problem, r.true_answer, r.predicted_answer])
+      ['ID', 'Problem', 'True Answer', 'Predicted Answer', 'Extracted Answers'],
+      ...results.map(r => [r.id, r.problem, r.true_answer, r.predicted_answer, r.extracted_answers])
     ].map(row => row.join(',')).join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv' });
@@ -197,6 +184,30 @@ const BatchInterface: React.FC = () => {
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
+  };
+
+  const columnDefs: ColDef<Result>[] = [
+    { field: 'id', headerName: 'ID', sortable: true, filter: true },
+    { field: 'problem', headerName: 'Problem', sortable: true, filter: true },
+    { field: 'true_answer', headerName: 'True Answer', sortable: true, filter: true },
+    { field: 'predicted_answer', headerName: 'Predicted Answer', sortable: true, filter: true },
+    { 
+      field: 'extracted_answers', 
+      headerName: 'Extracted Answers', 
+      sortable: true, 
+      filter: true,
+      cellRenderer: (params: ICellRendererParams<Result>) => {
+        return params.value?.map((answer: string, i: number) => (
+          <div key={i}>{answer}</div>
+        ));
+      }
+    }
+  ];
+
+  const defaultColDef: ColDef<Result> = {
+    flex: 1,
+    minWidth: 100,
+    resizable: true,
   };
 
   return (
@@ -304,36 +315,17 @@ const BatchInterface: React.FC = () => {
             </Button>
           </Box>
 
-          <TableContainer>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>ID</TableCell>
-                  <TableCell>Problem</TableCell>
-                  <TableCell>True Answer</TableCell>
-                  <TableCell>Predicted Answer</TableCell>
-                  <TableCell>Extracted Answers</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {results.map((result, index) => (
-                  <TableRow key={index}>
-                    <TableCell>{result.id}</TableCell>
-                    <TableCell>{result.problem}</TableCell>
-                    <TableCell>{result.true_answer}</TableCell>
-                    <TableCell>{result.predicted_answer}</TableCell>
-                    <TableCell>
-                      {result.extracted_answers?.map(([answer, tokens, weight, method], i) => (
-                        <div key={i}>
-                          [{answer}, {tokens}, {weight}]
-                        </div>
-                      ))}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <div className="ag-theme-alpine" style={{ height: 400, width: '100%' }}>
+            <AgGridReact
+              rowData={results}
+              columnDefs={columnDefs}
+              defaultColDef={defaultColDef}
+              animateRows={true}
+              rowSelection="multiple"
+              pagination={true}
+              paginationPageSize={10}
+            />
+          </div>
         </Paper>
       )}
     </Box>
