@@ -272,7 +272,7 @@ def process_single_question(row, max_num_seqs, max_length):
         "problem": problem,
         "true_answer": convert_numpy_types(answer),
         "predicted_answer": convert_numpy_types(predicted_answer),
-        "extracted_answers": [f"{a} | {t}" for a, t, w, m in extracted_answers],
+        "predictions": [f"{a} | {t}" for a, t, w, m in extracted_answers],
         "progress": f"{current_batch_index + 1}/{current_batch_total}"
     }
     
