@@ -30,7 +30,7 @@ git clone https://github.com/bogoconic1/aimo-inference-service.git
 cd aimo-inference-service
 ```
 
-2. Set up the backend:
+2. Initial Setup:
 ```bash
 bash setup.sh
 ```
