@@ -7,3 +7,4 @@ sglang[all]
 openai
 python-dotenv
 pydantic
+vllm==0.7.2

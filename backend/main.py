@@ -4,7 +4,6 @@ import time
 from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 import pandas as pd
 from pydantic import BaseModel
 import openai
@@ -23,8 +22,6 @@ app.add_middleware(
 
 # Model configuration
 MODEL_PATH = "casperhansen/deepseek-r1-distill-qwen-1.5b-awq"
-MAX_NUM_SEQS = 8
-MAX_MODEL_LEN = 19000
 
 # Initialize SGLang server
 def init_sglang_server():
@@ -47,9 +44,6 @@ client = openai.Client(base_url="http://127.0.0.1:30020/v1", api_key="None")
 
 # Global counter for batch requests
 num_requests_so_far = 0
-
-class ChatRequest(BaseModel):
-    message: str
 
 class BatchRequest(BaseModel):
     max_num_seqs: int = 8
@@ -121,7 +115,7 @@ def batch_message_generate(list_of_messages: list[str], max_tokens: int):
                         "model": MODEL_PATH,
                         "messages": msg,
                         "max_tokens": max_tokens,
-                        "temperature": 0.1,
+                        "temperature": 0.6,
                         "top_p": 0.95,
                         "min_p": 0.05,
                         "stop": ["</think>"]
@@ -213,43 +207,16 @@ def create_starter_messages(question: str, index: int) -> str:
     
     return options[index % len(options)]
 
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    try:
-        messages = [{"role": "user", "content": request.message + " The final answer should be a non-negative integer after taking modulo 1000."}]
-        
-        def generate():
-            response = client.chat.completions.create(
-                model=MODEL_PATH,
-                messages=messages,
-                max_tokens=14000,
-                temperature=0.6,
-                top_p=0.95,
-                stop=["</think>"],
-                stream=True
-            )
-            
-            for chunk in response:
-                if chunk.choices[0].delta.content:
-                    yield f"data: {json.dumps({'content': chunk.choices[0].delta.content})}\n\n"
-            
-            yield "data: [DONE]\n\n"
-        
-        return StreamingResponse(generate(), media_type="text/event-stream")
-    
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/batch")
 async def batch_inference(
     file: UploadFile = File(...),
-    max_num_seqs: int = 1,
-    max_length: int = 100,
+    max_num_seqs: int = 3,
+    max_length: int = 1000,
 ):
     try:
         # Read and validate CSV file
         df = pd.read_csv(file.file)
+        print(f"Processing batch with max_num_seqs={max_num_seqs}, max_length={max_length}")
         df = df[df.problem == df.problem].reset_index(drop=True)
         if not all(col in df.columns for col in ['problem', 'answer']):
             raise HTTPException(status_code=400, detail="CSV must contain 'problem' and 'answer' columns")
@@ -258,6 +225,7 @@ async def batch_inference(
         total = len(df)
         
         for idx, row in df.iterrows():
+            id = row['id']
             problem = row['problem']
             answer = row['answer']
             
@@ -300,6 +268,7 @@ async def batch_inference(
                 all_extracted_answers = extracted_answers
             
             results.append({
+                "id": id,
                 "problem": problem,
                 "true_answer": answer,
                 "predicted_answer": predicted_answer,

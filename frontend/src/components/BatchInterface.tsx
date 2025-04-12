@@ -18,6 +18,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DownloadIcon from '@mui/icons-material/Download';
 
 interface Result {
+  id: string,
   problem: string;
   true_answer: string;
   predicted_answer: string;
@@ -49,11 +50,12 @@ const BatchInterface: React.FC = () => {
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('max_num_seqs', maxNumSeqs.toString());
-    formData.append('max_length', maxLength.toString());
+    
+    // Use query parameters instead of form data for these values
+    const url = `http://localhost:8000/batch?max_num_seqs=${maxNumSeqs}&max_length=${maxLength}`;
 
     try {
-      const response = await fetch('http://localhost:8000/batch', {
+      const response = await fetch(url, {
         method: 'POST',
         body: formData,
       });
@@ -67,6 +69,7 @@ const BatchInterface: React.FC = () => {
     } catch (error) {
       console.error('Error:', error);
       setResults([{
+        id: 'Error',
         problem: 'Error',
         true_answer: 'Error',
         predicted_answer: 'Failed to process batch',
@@ -82,8 +85,8 @@ const BatchInterface: React.FC = () => {
     if (results.length === 0) return;
 
     const csvContent = [
-      ['Problem', 'True Answer', 'Predicted Answer'],
-      ...results.map(r => [r.problem, r.true_answer, r.predicted_answer])
+      ['ID', 'Problem', 'True Answer', 'Predicted Answer'],
+      ...results.map(r => [r.id, r.problem, r.true_answer, r.predicted_answer])
     ].map(row => row.join(',')).join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv' });
@@ -128,7 +131,7 @@ const BatchInterface: React.FC = () => {
               value={maxNumSeqs}
               onChange={(e) => setMaxNumSeqs(Number(e.target.value))}
               disabled={isLoading}
-              inputProps={{ min: 1, max: 16 }}
+              inputProps={{ min: 1, max: 100000 }}
             />
 
             <TextField
@@ -137,7 +140,7 @@ const BatchInterface: React.FC = () => {
               value={maxLength}
               onChange={(e) => setMaxLength(Number(e.target.value))}
               disabled={isLoading}
-              inputProps={{ min: 1000, max: 19000 }}
+              inputProps={{ min: 1, max: 100000 }}
             />
 
             <Button
@@ -178,6 +181,7 @@ const BatchInterface: React.FC = () => {
             <Table>
               <TableHead>
                 <TableRow>
+                  <TableCell>ID</TableCell>
                   <TableCell>Problem</TableCell>
                   <TableCell>True Answer</TableCell>
                   <TableCell>Predicted Answer</TableCell>
@@ -187,6 +191,7 @@ const BatchInterface: React.FC = () => {
               <TableBody>
                 {results.map((result, index) => (
                   <TableRow key={index}>
+                    <TableCell>{result.id}</TableCell>
                     <TableCell>{result.problem}</TableCell>
                     <TableCell>{result.true_answer}</TableCell>
                     <TableCell>{result.predicted_answer}</TableCell>
