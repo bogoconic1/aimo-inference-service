@@ -6,24 +6,25 @@ import {
   Paper,
   Typography,
   CircularProgress,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   LinearProgress,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DownloadIcon from '@mui/icons-material/Download';
+import { AgGridReact } from 'ag-grid-react';
+import { ColDef, ICellRendererParams, AllCommunityModule, ModuleRegistry} from 'ag-grid-community';
+import 'ag-grid-community/styles/ag-grid.css';
+import 'ag-grid-community/styles/ag-theme-alpine.css';
+
+// Register AG Grid Modules
+ModuleRegistry.registerModules([AllCommunityModule]);
 
 interface Result {
-  id: string,
+  id: string;
   problem: string;
   true_answer: string;
   predicted_answer: string;
   progress: string;
-  extracted_answers: [string, number, number, string][];  // [answer, num_tokens, weight, method]
+  predictions: string[];  // array of "answer | tokens" strings
 }
 
 const BatchInterface: React.FC = () => {
@@ -48,7 +49,6 @@ const BatchInterface: React.FC = () => {
     message?: string;
   }>({ status: 'waiting' });
 
-  // Function to poll the batch progress
   const pollBatchProgress = async () => {
     try {
       const response = await fetch('http://localhost:8000/batch');
@@ -60,23 +60,19 @@ const BatchInterface: React.FC = () => {
       setBatchStatus(data);
       
       if (data.status === 'in_progress' && data.current_result) {
-        // Adjust the current number to be 0-based for display
         const questionNumber = data.current;
         setCurrentProgress(
           `Question ${questionNumber} complete, Answer: ${data.current_result.true_answer}, Predicted Answer: ${data.current_result.predicted_answer}, Correct so far: ${data.correct_so_far}/${questionNumber}`
         );
         
-        // Update results with the latest batch results
         if (data.results && data.results.length > 0) {
           setResults(data.results);
         }
       } else if (data.status === 'completed') {
         setCurrentProgress(data.message || 'Batch processing completed');
-        // Update final results
         if (data.results && data.results.length > 0) {
           setResults(data.results);
         }
-        // Stop polling when completed
         if (pollingInterval) {
           clearInterval(pollingInterval);
           setPollingInterval(null);
@@ -85,7 +81,6 @@ const BatchInterface: React.FC = () => {
       }
     } catch (error) {
       console.error('Error polling batch progress:', error);
-      // Stop polling on error
       if (pollingInterval) {
         clearInterval(pollingInterval);
         setPollingInterval(null);
@@ -94,14 +89,12 @@ const BatchInterface: React.FC = () => {
     }
   };
 
-  // Start polling when batch processing starts
   useEffect(() => {
     if (isLoading && !pollingInterval) {
-      const interval = setInterval(pollBatchProgress, 1000); // Poll every second
+      const interval = setInterval(pollBatchProgress, 1000);
       setPollingInterval(interval);
     }
     
-    // Cleanup function to clear interval when component unmounts or isLoading changes
     return () => {
       if (pollingInterval) {
         clearInterval(pollingInterval);
@@ -130,7 +123,6 @@ const BatchInterface: React.FC = () => {
     formData.append('model_name', modelName);
     formData.append('system_prompt', systemPrompt);
     
-    // Use query parameters instead of form data for these values
     const url = `http://localhost:8000/batch?max_num_seqs=${maxNumSeqs}&max_length=${maxLength}`;
 
     try {
@@ -146,19 +138,6 @@ const BatchInterface: React.FC = () => {
       const data = await response.json();
       
       if (data.status === 'started') {
-        // Show initial progress message
-        // setCurrentProgress(`Starting batch processing for ${data.total} questions...`);
-        
-        // Add the first result if available
-        /* if (data.first_result) {
-          setResults([data.first_result]);
-          // Update progress message for first result
-          setCurrentProgress(
-            `Question 1 complete, Answer: ${data.first_result.true_answer}, Predicted Answer: ${data.first_result.predicted_answer}, Correct so far: ${data.correct_so_far || 0}/1`
-          );
-        } */
-        
-        // Start polling immediately
         if (!pollingInterval) {
           const interval = setInterval(pollBatchProgress, 1000);
           setPollingInterval(interval);
@@ -174,18 +153,92 @@ const BatchInterface: React.FC = () => {
         true_answer: 'Error',
         predicted_answer: 'Failed to process batch',
         progress: '0/0',
-        extracted_answers: []
+        predictions: []
       }]);
       setIsLoading(false);
     }
   };
 
+  const generatePredictionColumns = (numSeqs: number): ColDef<Result>[] => {
+    return Array.from({ length: numSeqs }, (_, i) => ({
+      field: 'predictions',
+      headerName: `Pred ${i + 1}`,
+      sortable: true,
+      filter: true,
+      width: 120,
+      valueGetter: (params) => {
+        if (!params.data) return '-';
+        return params.data.predictions[i] || '-';
+      },
+      cellStyle: (params): { [key: string]: string } => {
+        if (!params.value || params.value === '-' || !params.data) {
+          return { color: '#999' };
+        }
+        const answer = params.value.split(' | ')[0];
+        const isCorrect = answer === params.data.true_answer;
+        return {
+          backgroundColor: isCorrect ? 'rgba(76, 175, 80, 0.1)' : 'transparent',
+          fontWeight: isCorrect ? 'bold' : 'normal',
+          color: 'inherit'
+        };
+      }
+    }));
+  };
+
+  const columnDefs: ColDef<Result>[] = [
+    { 
+      field: 'id', 
+      headerName: 'ID', 
+      sortable: true, 
+      filter: true,
+      width: 100
+    },
+    { 
+      field: 'problem', 
+      headerName: 'Problem', 
+      sortable: true, 
+      filter: true,
+      flex: 1,
+      minWidth: 300
+    },
+    { 
+      field: 'true_answer', 
+      headerName: 'True', 
+      sortable: true, 
+      filter: true,
+      width: 100
+    },
+    { 
+      field: 'predicted_answer', 
+      headerName: 'Final', 
+      sortable: true, 
+      filter: true,
+      width: 100,
+      cellStyle: (params): { [key: string]: string } => {
+        if (!params.data) return { color: 'inherit' };
+        return {
+          backgroundColor: params.value === params.data.true_answer ? 'rgba(76, 175, 80, 0.1)' : 'transparent',
+          fontWeight: params.value === params.data.true_answer ? 'bold' : 'normal',
+          color: 'inherit'
+        };
+      }
+    },
+    ...generatePredictionColumns(maxNumSeqs)
+  ];
+
   const handleDownload = () => {
     if (results.length === 0) return;
 
+    const headers = ['ID', 'Problem', 'True Answer', 'Predicted Answer', ...Array.from({ length: maxNumSeqs }, (_, i) => `Pred ${i + 1}`)];
     const csvContent = [
-      ['ID', 'Problem', 'True Answer', 'Predicted Answer'],
-      ...results.map(r => [r.id, r.problem, r.true_answer, r.predicted_answer])
+      headers,
+      ...results.map(r => [
+        r.id, 
+        r.problem, 
+        r.true_answer, 
+        r.predicted_answer,
+        ...Array.from({ length: maxNumSeqs }, (_, i) => r.predictions[i] || '')
+      ])
     ].map(row => row.join(',')).join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv' });
@@ -197,6 +250,12 @@ const BatchInterface: React.FC = () => {
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
+  };
+
+  const defaultColDef: ColDef<Result> = {
+    flex: 1,
+    minWidth: 100,
+    resizable: true,
   };
 
   return (
@@ -304,36 +363,17 @@ const BatchInterface: React.FC = () => {
             </Button>
           </Box>
 
-          <TableContainer>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>ID</TableCell>
-                  <TableCell>Problem</TableCell>
-                  <TableCell>True Answer</TableCell>
-                  <TableCell>Predicted Answer</TableCell>
-                  <TableCell>Extracted Answers</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {results.map((result, index) => (
-                  <TableRow key={index}>
-                    <TableCell>{result.id}</TableCell>
-                    <TableCell>{result.problem}</TableCell>
-                    <TableCell>{result.true_answer}</TableCell>
-                    <TableCell>{result.predicted_answer}</TableCell>
-                    <TableCell>
-                      {result.extracted_answers?.map(([answer, tokens, weight, method], i) => (
-                        <div key={i}>
-                          [{answer}, {tokens}, {weight}]
-                        </div>
-                      ))}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          <div className="ag-theme-alpine" style={{ height: 400, width: '100%', border: '1px solid #ddd' }}>
+            <AgGridReact
+              rowData={results}
+              columnDefs={columnDefs}
+              defaultColDef={defaultColDef}
+              animateRows={true}
+              rowSelection="multiple"
+              pagination={true}
+              paginationPageSize={10}
+            />
+          </div>
         </Paper>
       )}
     </Box>
