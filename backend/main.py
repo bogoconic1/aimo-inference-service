@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import uuid
 from typing import List, Optional, Any, Dict, Union
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +45,9 @@ client = openai.Client(base_url="http://127.0.0.1:30020/v1", api_key="None")
 
 # Global counter for batch requests
 num_requests_so_far = 0
+
+# Dictionary to store batch information
+batch_storage = {}
 
 # Global variables to track batch progress
 current_batch_results = []
@@ -287,13 +291,18 @@ def process_single_question(row, max_num_seqs, max_length):
     
     return result
 
-@app.get("/batch")
-async def get_batch_progress():
+@app.get("/batch/progress/{batch_id}")
+async def get_batch_progress(batch_id: str):
     """
     Get the current progress of the batch processing.
     Returns the current result and progress information.
     """
+    if batch_id not in batch_storage:
+        raise HTTPException(status_code=404, detail="Batch ID not found")
+    
+    batch_info = batch_storage[batch_id]
     current_status = None
+    
     if current_batch_df is None:
         current_status = {
             "status": "waiting",
@@ -306,6 +315,8 @@ async def get_batch_progress():
             "message": f"All {current_batch_total} questions completed. Correct: {current_batch_correct}/{current_batch_total}",
             "results": current_batch_results
         }
+        # Update batch storage
+        batch_storage[batch_id].update(current_status)
     
     # Process the next question if available
     elif current_batch_index < len(current_batch_df):
@@ -324,6 +335,8 @@ async def get_batch_progress():
             "current_result": result,
             "results": current_batch_results
         }
+        # Update batch storage
+        batch_storage[batch_id].update(current_status)
 
     else:
         current_status = {
@@ -333,6 +346,19 @@ async def get_batch_progress():
 
     print(current_status)
     return current_status
+
+@app.get("/retrieve/{batch_id}")
+async def get_batch_by_id(batch_id: str):
+    """
+    Get batch information by ID.
+    """
+    if batch_id not in batch_storage:
+        raise HTTPException(status_code=404, detail="Batch ID not found")
+    
+    batch_info = batch_storage[batch_id]
+    print(batch_info)
+    
+    return batch_info
 
 @app.post("/batch")
 async def batch_inference(
@@ -376,10 +402,29 @@ async def batch_inference(
         current_batch_max_length = max_length
         current_system_prompt = system_prompt
         
+        # Generate a unique batch ID
+        batch_id = str(uuid.uuid4())
+        
+        # Store batch information
+        batch_storage[batch_id] = {
+            "status": "started",
+            "message": f"Batch processing started for {current_batch_total} questions",
+            "total": current_batch_total,
+            "current_index": 0,
+            "correct_so_far": 0,
+            "results": [],
+            "df": df.to_dict(orient='records'),  # Convert DataFrame to list of dictionaries
+            "max_num_seqs": max_num_seqs,
+            "max_length": max_length,
+            "model_name": model_name,
+            "system_prompt": system_prompt
+        }
+        
         return {
             "status": "started",
             "message": f"Batch processing started for {current_batch_total} questions",
-            "total": current_batch_total
+            "total": current_batch_total,
+            "batch_id": batch_id
         }
     
     except Exception as e:
@@ -389,4 +434,3 @@ async def batch_inference(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 
-

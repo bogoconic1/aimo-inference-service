@@ -7,9 +7,15 @@ import {
   Typography,
   CircularProgress,
   LinearProgress,
+  Divider,
+  Grid,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DownloadIcon from '@mui/icons-material/Download';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import SearchIcon from '@mui/icons-material/Search';
 import { AgGridReact } from 'ag-grid-react';
 import { ColDef, ICellRendererParams, AllCommunityModule, ModuleRegistry} from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
@@ -41,23 +47,49 @@ const BatchInterface: React.FC = () => {
   const [currentProgress, setCurrentProgress] = useState('');
   const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
   const [batchStatus, setBatchStatus] = useState<{
-    status: 'waiting' | 'in_progress' | 'completed' | 'error';
+    status: 'waiting' | 'started' | 'in_progress' | 'completed' | 'error';
     current?: number;
     total?: number;
     correct_so_far?: number;
     current_result?: Result;
     message?: string;
+    batch_id?: string;
   }>({ status: 'waiting' });
+  
+  // New state for batch ID retrieval
+  const [batchId, setBatchId] = useState('');
+  const [isRetrieving, setIsRetrieving] = useState(false);
+  const [retrievedBatchId, setRetrievedBatchId] = useState('');
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const pollBatchProgress = async () => {
     try {
-      const response = await fetch('http://localhost:8000/batch');
+      if (!batchStatus.batch_id) {
+        throw new Error('No batch ID available');
+      }
+
+      const response = await fetch(`http://localhost:8000/batch/progress/${batchStatus.batch_id}`);
       if (!response.ok) {
         throw new Error('Failed to fetch batch progress');
       }
       
       const data = await response.json();
-      setBatchStatus(data);
+      
+      // If the batch hasn't started yet, stop polling
+      if (data.status === 'waiting') {
+        if (pollingInterval) {
+          clearInterval(pollingInterval);
+          setPollingInterval(null);
+        }
+        setIsLoading(false);
+        return;
+      }
+      
+      setBatchStatus(prev => ({
+        ...prev,
+        ...data,
+        batch_id: prev.batch_id // Preserve the batch ID
+      }));
       
       if (data.status === 'in_progress' && data.current_result) {
         const questionNumber = data.current;
@@ -89,9 +121,65 @@ const BatchInterface: React.FC = () => {
     }
   };
 
+  const pollBatchById = async (id: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/retrieve/${id}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch batch progress');
+      }
+      
+      const data = await response.json();
+      
+      if (data.status === 'in_progress') {
+        const questionNumber = data.current_index;
+        setCurrentProgress(
+          `Question ${questionNumber} complete, Correct so far: ${data.correct_so_far}/${questionNumber}`
+        );
+        
+        if (data.results && data.results.length > 0) {
+          setResults(data.results);
+        }
+      } else if (data.status === 'completed') {
+        setCurrentProgress(data.message || 'Batch processing completed');
+        if (data.results && data.results.length > 0) {
+          setResults(data.results);
+        }
+        if (pollingInterval) {
+          clearInterval(pollingInterval);
+          setPollingInterval(null);
+        }
+        setIsRetrieving(false);
+      }
+      
+      setBatchStatus({
+        status: data.status,
+        current: data.current_index,
+        total: data.total,
+        correct_so_far: data.correct_so_far,
+        message: data.message,
+        batch_id: id
+      });
+      
+    } catch (error) {
+      console.error('Error polling batch progress:', error);
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+        setPollingInterval(null);
+      }
+      setIsRetrieving(false);
+      setCurrentProgress('Error retrieving batch information');
+    }
+  };
+
   useEffect(() => {
-    if (isLoading && !pollingInterval) {
-      const interval = setInterval(pollBatchProgress, 1000);
+    if ((isLoading || isRetrieving) && !pollingInterval) {
+      const interval = setInterval(() => {
+        if (isLoading && batchStatus.batch_id) {
+          pollBatchProgress();
+        } else if (isRetrieving && retrievedBatchId) {
+          pollBatchById(retrievedBatchId);
+        }
+      }, 1000);
       setPollingInterval(interval);
     }
     
@@ -101,7 +189,7 @@ const BatchInterface: React.FC = () => {
         setPollingInterval(null);
       }
     };
-  }, [isLoading]);
+  }, [isLoading, isRetrieving, retrievedBatchId, batchStatus.batch_id]);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
@@ -138,12 +226,22 @@ const BatchInterface: React.FC = () => {
       const data = await response.json();
       
       if (data.status === 'started') {
-        if (!pollingInterval) {
-          const interval = setInterval(pollBatchProgress, 1000);
-          setPollingInterval(interval);
-        }
+        setBatchStatus({
+          status: 'started',
+          message: data.message,
+          total: data.total,
+          batch_id: data.batch_id
+        });
+        // Polling will be handled by useEffect after batchStatus is updated
       } else {
-        throw new Error('Unexpected response from server');
+        // Just set the batch ID and status without polling
+        setBatchStatus({
+          status: data.status,
+          message: data.message || 'Batch created, waiting to start...',
+          total: data.total,
+          batch_id: data.batch_id
+        });
+        setIsLoading(false);
       }
     } catch (error) {
       console.error('Error:', error);
@@ -156,6 +254,59 @@ const BatchInterface: React.FC = () => {
         predictions: []
       }]);
       setIsLoading(false);
+    }
+  };
+
+  const handleRetrieveBatch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!batchId) return;
+
+    setIsRetrieving(true);
+    setResults([]);
+    setCurrentProgress('');
+    setRetrievedBatchId(batchId);
+
+    try {
+      const response = await fetch(`http://localhost:8000/retrieve/${batchId}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to retrieve batch');
+      }
+      
+      const data = await response.json();
+
+      console.log(data)
+      
+      setBatchStatus({
+        status: data.status,
+        current: data.current_index,
+        total: data.total,
+        correct_so_far: data.correct_so_far,
+        message: data.message,
+        batch_id: batchId
+      });
+
+      console.log(batchStatus)
+      
+      if (data.results && data.results.length > 0) {
+        setResults(data.results);
+      }
+      
+      if (data.status === 'completed') {
+        setIsRetrieving(false);
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      setCurrentProgress('Error retrieving batch information');
+      setIsRetrieving(false);
+    }
+  };
+
+  const copyBatchId = () => {
+    if (batchStatus.batch_id) {
+      navigator.clipboard.writeText(batchStatus.batch_id);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
     }
   };
 
@@ -333,7 +484,64 @@ const BatchInterface: React.FC = () => {
         </form>
       </Paper>
 
+      {batchStatus.batch_id && (
+        <Paper elevation={3} sx={{ p: 3, mb: 3, bgcolor: 'info.light' }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="h6" color="info.dark">
+              Batch ID: {batchStatus.batch_id}
+            </Typography>
+            <Tooltip title={copySuccess ? "Copied!" : "Copy to clipboard"}>
+              <IconButton onClick={copyBatchId} color="info">
+                <ContentCopyIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            Save this ID to retrieve your batch results later.
+          </Typography>
+        </Paper>
+      )}
+
+      <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
+        <Typography variant="h6" sx={{ mb: 2 }}>Retrieve Batch by ID</Typography>
+        <form onSubmit={handleRetrieveBatch}>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} sm={9}>
+              <TextField
+                label="Batch ID"
+                value={batchId}
+                onChange={(e) => setBatchId(e.target.value)}
+                disabled={isRetrieving}
+                fullWidth
+                placeholder="Enter batch ID to retrieve results"
+              />
+            </Grid>
+            <Grid item xs={12} sm={3}>
+              <Button
+                type="submit"
+                variant="contained"
+                color="secondary"
+                disabled={!batchId || isRetrieving}
+                fullWidth
+                startIcon={isRetrieving ? <CircularProgress size={20} /> : <SearchIcon />}
+              >
+                {isRetrieving ? 'Retrieving...' : 'Retrieve'}
+              </Button>
+            </Grid>
+          </Grid>
+        </form>
+      </Paper>
+
       {isLoading && (
+        <Box sx={{ width: '100%', mb: 3 }}>
+          <LinearProgress />
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            {currentProgress}
+          </Typography>
+        </Box>
+      )}
+
+      {isRetrieving && (
         <Box sx={{ width: '100%', mb: 3 }}>
           <LinearProgress />
           <Typography variant="body2" sx={{ mt: 1 }}>
